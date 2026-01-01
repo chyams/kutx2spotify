@@ -2,15 +2,20 @@
 
 from datetime import datetime
 from io import StringIO
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
+from kutx2spotify.browser import SearchResult, SelectionResult
 from kutx2spotify.models import Match, MatchResult, MatchStatus, Song, SpotifyTrack
 from kutx2spotify.output import (
     format_duration,
     format_duration_diff,
     generate_spotify_search_url,
+    print_browser_header,
+    print_browser_summary,
+    print_browser_track_added,
+    print_browser_track_skipped,
     print_error,
     print_info,
     print_issues,
@@ -351,3 +356,211 @@ class TestUtilityPrints:
             print_info("Here is some info")
         text = output.getvalue()
         assert "Here is some info" in text
+
+
+def make_search_result(
+    title: str = "Test Song",
+    artist: str = "Test Artist",
+    album: str = "Test Album",
+    duration_ms: int = 180000,
+) -> SearchResult:
+    """Create a test search result."""
+    mock_locator = MagicMock()
+    return SearchResult(
+        title=title,
+        artist=artist,
+        album=album,
+        duration_ms=duration_ms,
+        row_locator=mock_locator,
+    )
+
+
+class TestPrintBrowserHeader:
+    """Tests for print_browser_header function."""
+
+    def test_browser_header_basic(self) -> None:
+        """Test basic browser header."""
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_header("KUTX 2025-12-31")
+        text = output.getvalue()
+        assert "Creating playlist: KUTX 2025-12-31 (private)" in text
+        assert "Adding songs..." in text
+
+    def test_browser_header_custom_name(self) -> None:
+        """Test browser header with custom name."""
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_header("My Custom Playlist")
+        text = output.getvalue()
+        assert "My Custom Playlist" in text
+
+
+class TestPrintBrowserTrackAdded:
+    """Tests for print_browser_track_added function."""
+
+    def test_exact_match(self) -> None:
+        """Test printing exact match."""
+        song = make_song()
+        selected = make_search_result()
+        selection = SelectionResult(
+            selected=selected, reason="exact_match", alternatives=[]
+        )
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_added(1, song, selection)
+        text = output.getvalue()
+        assert "Test Song" in text
+        assert "Test Artist" in text
+        assert "[exact_match]" in text
+
+    def test_album_match(self) -> None:
+        """Test printing album match."""
+        song = make_song(duration_ms=180000)
+        selected = make_search_result(duration_ms=195000)  # +15s
+        selection = SelectionResult(
+            selected=selected, reason="album_match", alternatives=[]
+        )
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_added(1, song, selection)
+        text = output.getvalue()
+        assert "[album_match: +15s]" in text
+
+    def test_duration_match(self) -> None:
+        """Test printing duration match."""
+        song = make_song(album="Original Album")
+        selected = make_search_result(album="Different Album")
+        selection = SelectionResult(
+            selected=selected, reason="duration_match", alternatives=[]
+        )
+
+        output = StringIO()
+        with patch(
+            "kutx2spotify.output.console",
+            Console(file=output, no_color=True, width=200),
+        ):
+            print_browser_track_added(1, song, selection)
+        text = output.getvalue()
+        assert "duration_match" in text
+        assert "Different Album" in text
+        assert "Original Album" in text
+
+    def test_first_result(self) -> None:
+        """Test printing first result fallback."""
+        song = make_song()
+        selected = make_search_result()
+        selection = SelectionResult(
+            selected=selected, reason="first_result", alternatives=[]
+        )
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_added(1, song, selection)
+        text = output.getvalue()
+        assert "[first_result]" in text
+
+    def test_with_alternatives(self) -> None:
+        """Test printing with alternatives shown."""
+        song = make_song(duration_ms=180000)
+        selected = make_search_result(album="Album 1")
+        alt1 = make_search_result(album="Album 2", duration_ms=185000)
+        alt2 = make_search_result(album="Album 3", duration_ms=190000)
+        selection = SelectionResult(
+            selected=selected, reason="album_match", alternatives=[alt1, alt2]
+        )
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_added(1, song, selection)
+        text = output.getvalue()
+        assert "Other options:" in text
+        assert "Album 2" in text
+        assert "Album 3" in text
+
+    def test_no_selected_track(self) -> None:
+        """Test when no track is selected (early return)."""
+        song = make_song()
+        selection = SelectionResult(selected=None, reason="no_results", alternatives=[])
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_added(1, song, selection)
+        text = output.getvalue()
+        # Should not print anything
+        assert text.strip() == ""
+
+
+class TestPrintBrowserTrackSkipped:
+    """Tests for print_browser_track_skipped function."""
+
+    def test_skipped_no_results(self) -> None:
+        """Test printing skipped track with no results."""
+        song = make_song()
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_skipped(1, song, "no results")
+        text = output.getvalue()
+        assert "Test Song" in text
+        assert "Test Artist" in text
+        assert "[skipped: no results]" in text
+
+    def test_skipped_failed_to_add(self) -> None:
+        """Test printing skipped track that failed to add."""
+        song = make_song(title="Obscure Song", artist="Unknown Artist")
+
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_track_skipped(4, song, "failed to add")
+        text = output.getvalue()
+        assert "Obscure Song" in text
+        assert "[skipped: failed to add]" in text
+        assert "4." in text
+
+
+class TestPrintBrowserSummary:
+    """Tests for print_browser_summary function."""
+
+    def test_summary_all_added(self) -> None:
+        """Test summary when all tracks added."""
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_summary(
+                added=10,
+                skipped=0,
+                playlist_url="https://open.spotify.com/playlist/abc123",
+            )
+        text = output.getvalue()
+        assert "Summary:" in text
+        assert "Added: 10/10" in text
+        assert "Skipped: 0" in text
+        assert "https://open.spotify.com/playlist/abc123" in text
+
+    def test_summary_some_skipped(self) -> None:
+        """Test summary with some tracks skipped."""
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_summary(
+                added=7,
+                skipped=3,
+                playlist_url="https://open.spotify.com/playlist/xyz789",
+            )
+        text = output.getvalue()
+        assert "Added: 7/10" in text
+        assert "Skipped: 3" in text
+
+    def test_summary_all_skipped(self) -> None:
+        """Test summary when all tracks skipped."""
+        output = StringIO()
+        with patch("kutx2spotify.output.console", Console(file=output, no_color=True)):
+            print_browser_summary(
+                added=0,
+                skipped=5,
+                playlist_url="https://open.spotify.com/playlist/empty",
+            )
+        text = output.getvalue()
+        assert "Added: 0/5" in text
+        assert "Skipped: 5" in text

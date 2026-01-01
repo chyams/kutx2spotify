@@ -64,6 +64,22 @@ Response structure (playlists nested in program blocks):
 4. Duration filter: prefer tracks within +/- 10 seconds
 5. Popularity tiebreaker: pick most popular if multiple matches
 
+## CLI Flags
+
+Standard mode (API-based):
+- `--date/-d` - Required. Date to fetch playlist (YYYY-MM-DD)
+- `--start/-s` - Start time filter (HH:MM)
+- `--end/-e` - End time filter (HH:MM)
+- `--name/-n` - Playlist name (default: "KUTX YYYY-MM-DD")
+- `--preview/-p` - Preview mode (no playlist creation)
+- `--manual/-m` - Manual mode (output search links)
+- `--cached/-c` - Use cached KUTX data
+- `--resolve/-r` - Apply resolution (INDEX=CHOICE)
+
+Browser mode (Playwright-based):
+- `--browser/-b` - Use browser automation instead of Spotify API
+- `--login` - Force fresh Spotify login (with --browser)
+
 ## Conventions
 
 - Virtual environment: `~/venvs/kutx2spotify` (not .venv)

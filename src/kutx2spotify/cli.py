@@ -1,15 +1,21 @@
 """Click-based CLI for KUTX to Spotify integration."""
 
+import asyncio
 from datetime import datetime, time
 from typing import Any
 
 import click
 
+from kutx2spotify.browser import SpotifyBrowser, select_best_match
 from kutx2spotify.cache import KUTXCache, ResolutionCache
 from kutx2spotify.kutx import KUTXClient
 from kutx2spotify.matcher import Matcher
-from kutx2spotify.models import MatchResult
+from kutx2spotify.models import MatchResult, Song
 from kutx2spotify.output import (
+    print_browser_header,
+    print_browser_summary,
+    print_browser_track_added,
+    print_browser_track_skipped,
     print_error,
     print_info,
     print_issues,
@@ -176,6 +182,17 @@ TIME = TimeType()
     multiple=True,
     help="Apply saved resolution (INDEX=CHOICE, e.g., 3=1).",
 )
+@click.option(
+    "--browser",
+    "-b",
+    is_flag=True,
+    help="Use browser automation instead of Spotify API.",
+)
+@click.option(
+    "--login",
+    is_flag=True,
+    help="Force fresh Spotify login (with --browser).",
+)
 @click.version_option(version="0.1.0", prog_name="kutx2spotify")
 def main(
     date: datetime,
@@ -186,6 +203,8 @@ def main(
     manual: bool,
     cached: bool,
     resolve: tuple[str, ...],
+    browser: bool,
+    login: bool,
 ) -> None:
     """Fetch KUTX playlist and create Spotify playlist.
 
@@ -221,6 +240,12 @@ def main(
         raise SystemExit(1)
 
     print_info(f"Found {len(songs)} songs")
+
+    # Browser mode: use Playwright instead of API
+    if browser:
+        playlist_name = name or f"KUTX {date.strftime('%Y-%m-%d')}"
+        asyncio.run(_run_browser_workflow(songs, playlist_name, force_login=login))
+        return
 
     # Match songs
     matcher = Matcher(
@@ -258,6 +283,55 @@ def main(
         name=name,
         date=date,
     )
+
+
+async def _run_browser_workflow(
+    songs: list[Song], playlist_name: str, force_login: bool
+) -> None:
+    """Run browser-based workflow to create playlist.
+
+    Args:
+        songs: List of songs to add to playlist.
+        playlist_name: Name for the new playlist.
+        force_login: Force fresh login instead of using saved cookies.
+    """
+    async with SpotifyBrowser() as browser:
+        # Login
+        logged_in = await browser.ensure_logged_in(force_login=force_login)
+        if not logged_in:
+            print_error("Failed to log in to Spotify.")
+            raise SystemExit(1)
+
+        # Create playlist
+        playlist_url = await browser.create_playlist(playlist_name)
+        if not playlist_url:
+            print_error("Failed to create playlist.")
+            raise SystemExit(1)
+
+        print_browser_header(playlist_name)
+
+        added = 0
+        skipped = 0
+
+        for i, song in enumerate(songs, 1):
+            query = f"{song.artist} {song.title}"
+            results = await browser.search_tracks(query)
+            selection = select_best_match(results, song.album, song.duration_ms)
+
+            if selection.selected is None:
+                print_browser_track_skipped(i, song, "no results")
+                skipped += 1
+                continue
+
+            try:
+                await browser.add_to_current_playlist(selection.selected, playlist_name)
+                print_browser_track_added(i, song, selection)
+                added += 1
+            except Exception:
+                print_browser_track_skipped(i, song, "failed to add")
+                skipped += 1
+
+        print_browser_summary(added, skipped, playlist_url)
 
 
 def _fetch_songs(
