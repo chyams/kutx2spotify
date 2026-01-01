@@ -9,12 +9,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from kutx2spotify.browser import (
+    DURATION_TOLERANCE_MS,
+    SearchResult,
+    SelectionResult,
     SpotifyBrowser,
+    albums_match,
     clear_cookies,
     get_cookie_path,
     human_delay,
     load_cookies,
+    parse_duration,
     save_cookies,
+    select_best_match,
 )
 
 
@@ -816,3 +822,535 @@ class TestSpotifyBrowserCreatePlaylist:
                     mock_page.wait_for_url.assert_called_once_with("**/playlist/**")
 
         asyncio.run(test())
+
+
+class TestAlbumsMatch:
+    """Tests for albums_match function."""
+
+    def test_exact_match(self) -> None:
+        """Test that identical albums match."""
+        assert albums_match("Head Hunters", "Head Hunters") is True
+
+    def test_case_insensitive_match(self) -> None:
+        """Test that albums match regardless of case."""
+        assert albums_match("Head Hunters", "head hunters") is True
+        assert albums_match("HEAD HUNTERS", "Head Hunters") is True
+
+    def test_no_match(self) -> None:
+        """Test that different albums don't match."""
+        assert albums_match("Head Hunters", "Thrust") is False
+
+    def test_empty_strings_match(self) -> None:
+        """Test that empty strings match each other."""
+        assert albums_match("", "") is True
+
+
+class TestParseDuration:
+    """Tests for parse_duration function."""
+
+    def test_parse_simple_duration(self) -> None:
+        """Test parsing simple M:SS format."""
+        assert parse_duration("3:45") == 225000  # 3*60 + 45 = 225 seconds
+
+    def test_parse_long_duration(self) -> None:
+        """Test parsing longer durations."""
+        assert parse_duration("10:30") == 630000  # 10*60 + 30 = 630 seconds
+
+    def test_parse_short_duration(self) -> None:
+        """Test parsing short durations."""
+        assert parse_duration("0:30") == 30000  # 30 seconds
+
+    def test_parse_with_whitespace(self) -> None:
+        """Test parsing duration with whitespace."""
+        assert parse_duration("  3:45  ") == 225000
+
+    def test_parse_invalid_format(self) -> None:
+        """Test parsing invalid format returns 0."""
+        assert parse_duration("invalid") == 0
+        assert parse_duration("3:4") == 0  # Not two digit seconds
+        assert parse_duration("") == 0
+
+
+class TestSearchResultDurationDisplay:
+    """Tests for SearchResult.duration_display property."""
+
+    def test_duration_display_simple(self) -> None:
+        """Test basic duration display formatting."""
+        mock_locator = MagicMock()
+        result = SearchResult(
+            title="Test",
+            artist="Artist",
+            album="Album",
+            duration_ms=225000,  # 3:45
+            row_locator=mock_locator,
+        )
+        assert result.duration_display == "3:45"
+
+    def test_duration_display_zero_padded(self) -> None:
+        """Test seconds are zero-padded."""
+        mock_locator = MagicMock()
+        result = SearchResult(
+            title="Test",
+            artist="Artist",
+            album="Album",
+            duration_ms=305000,  # 5:05
+            row_locator=mock_locator,
+        )
+        assert result.duration_display == "5:05"
+
+    def test_duration_display_short(self) -> None:
+        """Test short duration formatting."""
+        mock_locator = MagicMock()
+        result = SearchResult(
+            title="Test",
+            artist="Artist",
+            album="Album",
+            duration_ms=30000,  # 0:30
+            row_locator=mock_locator,
+        )
+        assert result.duration_display == "0:30"
+
+
+class TestSelectBestMatch:
+    """Tests for select_best_match function."""
+
+    @pytest.fixture
+    def mock_results(self) -> list[SearchResult]:
+        """Create mock search results for testing."""
+        mock_locator = MagicMock()
+        return [
+            SearchResult(
+                title="Song 1",
+                artist="Artist 1",
+                album="Target Album",
+                duration_ms=180000,  # 3:00
+                row_locator=mock_locator,
+            ),
+            SearchResult(
+                title="Song 2",
+                artist="Artist 2",
+                album="Different Album",
+                duration_ms=180000,  # 3:00
+                row_locator=mock_locator,
+            ),
+            SearchResult(
+                title="Song 3",
+                artist="Artist 3",
+                album="Another Album",
+                duration_ms=200000,  # 3:20
+                row_locator=mock_locator,
+            ),
+        ]
+
+    def test_exact_match_album_and_duration(
+        self, mock_results: list[SearchResult]
+    ) -> None:
+        """Test exact match is found when album and duration match."""
+        result = select_best_match(
+            mock_results,
+            target_album="Target Album",
+            target_duration_ms=180000,
+        )
+        assert result.selected is not None
+        assert result.selected.album == "Target Album"
+        assert result.reason == "exact_match"
+        assert len(result.alternatives) == 2
+
+    def test_album_match_only(self) -> None:
+        """Test album match when duration differs."""
+        mock_locator = MagicMock()
+        results = [
+            SearchResult(
+                title="Song",
+                artist="Artist",
+                album="Target Album",
+                duration_ms=180000,  # 3:00
+                row_locator=mock_locator,
+            ),
+        ]
+        # Target duration is very different
+        result = select_best_match(
+            results,
+            target_album="Target Album",
+            target_duration_ms=300000,  # 5:00 - way off
+        )
+        assert result.selected is not None
+        assert result.reason == "album_match"
+
+    def test_duration_match_only(self) -> None:
+        """Test duration match when album differs."""
+        mock_locator = MagicMock()
+        results = [
+            SearchResult(
+                title="Song",
+                artist="Artist",
+                album="Different Album",
+                duration_ms=180000,  # 3:00
+                row_locator=mock_locator,
+            ),
+        ]
+        result = select_best_match(
+            results,
+            target_album="Target Album",
+            target_duration_ms=185000,  # Within tolerance
+        )
+        assert result.selected is not None
+        assert result.reason == "duration_match"
+
+    def test_first_result_fallback(self) -> None:
+        """Test first result is used when no matches."""
+        mock_locator = MagicMock()
+        results = [
+            SearchResult(
+                title="Song 1",
+                artist="Artist",
+                album="Different Album",
+                duration_ms=180000,
+                row_locator=mock_locator,
+            ),
+            SearchResult(
+                title="Song 2",
+                artist="Artist",
+                album="Another Album",
+                duration_ms=200000,
+                row_locator=mock_locator,
+            ),
+        ]
+        result = select_best_match(
+            results,
+            target_album="Target Album",
+            target_duration_ms=300000,  # No match
+        )
+        assert result.selected is not None
+        assert result.selected.title == "Song 1"
+        assert result.reason == "first_result"
+        assert len(result.alternatives) == 1
+
+    def test_no_results(self) -> None:
+        """Test no results case."""
+        result = select_best_match(
+            [],
+            target_album="Target Album",
+            target_duration_ms=180000,
+        )
+        assert result.selected is None
+        assert result.reason == "no_results"
+        assert result.alternatives == []
+
+    def test_duration_tolerance_boundary(self) -> None:
+        """Test duration matching at tolerance boundary."""
+        mock_locator = MagicMock()
+        results = [
+            SearchResult(
+                title="Song",
+                artist="Artist",
+                album="Different Album",
+                duration_ms=180000,
+                row_locator=mock_locator,
+            ),
+        ]
+        # At exactly the tolerance boundary
+        result = select_best_match(
+            results,
+            target_album="Wrong Album",
+            target_duration_ms=180000 + DURATION_TOLERANCE_MS,
+        )
+        assert result.reason == "duration_match"
+
+        # Just outside tolerance
+        result = select_best_match(
+            results,
+            target_album="Wrong Album",
+            target_duration_ms=180000 + DURATION_TOLERANCE_MS + 1,
+        )
+        assert result.reason == "first_result"
+
+
+class TestSpotifyBrowserSearchTracks:
+    """Tests for SpotifyBrowser.search_tracks method."""
+
+    def test_search_tracks_returns_results(
+        self,
+        mock_playwright: MagicMock,
+        mock_browser: MagicMock,
+        mock_context: MagicMock,
+        mock_page: MagicMock,
+    ) -> None:
+        """Test that search_tracks returns parsed results."""
+        mock_context.new_page.return_value = mock_page
+        mock_browser.new_context.return_value = mock_context
+        mock_playwright.chromium.launch.return_value = mock_browser
+        mock_playwright.stop = AsyncMock()
+
+        # Mock row elements
+        mock_row = MagicMock()
+        mock_title = MagicMock()
+        mock_title.inner_text = AsyncMock(return_value="Test Song")
+        mock_title.first = mock_title
+
+        mock_artist_links = MagicMock()
+        mock_artist_links.count = AsyncMock(return_value=1)
+        mock_artist_links.nth = MagicMock(
+            return_value=MagicMock(
+                inner_text=AsyncMock(return_value="Test Artist"),
+                get_attribute=AsyncMock(return_value="/artist/123"),
+            )
+        )
+
+        mock_album_links = MagicMock()
+        mock_album_links.count = AsyncMock(return_value=1)
+        mock_album_links.first = MagicMock(
+            inner_text=AsyncMock(return_value="Test Album")
+        )
+
+        mock_duration = MagicMock()
+        mock_duration.inner_text = AsyncMock(return_value="3:45")
+        mock_duration.first = mock_duration
+
+        def row_locator_side_effect(selector: str) -> MagicMock:
+            if "internal-track-link" in selector:
+                return mock_title
+            elif "tracklist-row-subtitle" in selector and "album" in selector:
+                return mock_album_links
+            elif "tracklist-row-subtitle" in selector:
+                return mock_artist_links
+            elif "duration" in selector:
+                return mock_duration
+            return MagicMock()
+
+        mock_row.locator = MagicMock(side_effect=row_locator_side_effect)
+
+        mock_rows = MagicMock()
+        mock_rows.count = AsyncMock(return_value=1)
+        mock_rows.nth = MagicMock(return_value=mock_row)
+
+        def page_locator_side_effect(selector: str) -> MagicMock:
+            if "tracklist-row" in selector:
+                return mock_rows
+            return MagicMock()
+
+        mock_page.locator = MagicMock(side_effect=page_locator_side_effect)
+
+        async def run_test() -> list[SearchResult]:
+            with (
+                patch("kutx2spotify.browser.async_playwright") as mock_pw,
+                patch("kutx2spotify.browser.human_delay", new=AsyncMock()),
+            ):
+                mock_pw_instance = MagicMock()
+                mock_pw_instance.start = AsyncMock(return_value=mock_playwright)
+                mock_pw.return_value = mock_pw_instance
+
+                async with SpotifyBrowser() as browser:
+                    results = await browser.search_tracks("Test Artist Test Song")
+                    return results
+
+        results = asyncio.run(run_test())
+        assert len(results) == 1
+        assert results[0].title == "Test Song"
+        assert results[0].artist == "Test Artist"
+        assert results[0].album == "Test Album"
+        assert results[0].duration_ms == 225000
+
+    def test_search_tracks_no_results(
+        self,
+        mock_playwright: MagicMock,
+        mock_browser: MagicMock,
+        mock_context: MagicMock,
+        mock_page: MagicMock,
+    ) -> None:
+        """Test that search_tracks returns empty list when no results."""
+        mock_context.new_page.return_value = mock_page
+        mock_browser.new_context.return_value = mock_context
+        mock_playwright.chromium.launch.return_value = mock_browser
+        mock_playwright.stop = AsyncMock()
+
+        # Simulate timeout (no results)
+        mock_page.wait_for_selector = AsyncMock(side_effect=Exception("Timeout"))
+
+        async def run_test() -> list[SearchResult]:
+            with (
+                patch("kutx2spotify.browser.async_playwright") as mock_pw,
+                patch("kutx2spotify.browser.human_delay", new=AsyncMock()),
+            ):
+                mock_pw_instance = MagicMock()
+                mock_pw_instance.start = AsyncMock(return_value=mock_playwright)
+                mock_pw.return_value = mock_pw_instance
+
+                async with SpotifyBrowser() as browser:
+                    results = await browser.search_tracks("nonexistent track")
+                    return results
+
+        results = asyncio.run(run_test())
+        assert results == []
+
+    def test_search_tracks_limit(
+        self,
+        mock_playwright: MagicMock,
+        mock_browser: MagicMock,
+        mock_context: MagicMock,
+        mock_page: MagicMock,
+    ) -> None:
+        """Test that search_tracks respects limit parameter."""
+        mock_context.new_page.return_value = mock_page
+        mock_browser.new_context.return_value = mock_context
+        mock_playwright.chromium.launch.return_value = mock_browser
+        mock_playwright.stop = AsyncMock()
+
+        # Mock row elements
+        mock_row = MagicMock()
+        mock_title = MagicMock()
+        mock_title.inner_text = AsyncMock(return_value="Test Song")
+        mock_title.first = mock_title
+
+        mock_artist_links = MagicMock()
+        mock_artist_links.count = AsyncMock(return_value=0)
+
+        mock_album_links = MagicMock()
+        mock_album_links.count = AsyncMock(return_value=0)
+
+        mock_duration = MagicMock()
+        mock_duration.inner_text = AsyncMock(return_value="3:00")
+        mock_duration.first = mock_duration
+
+        def row_locator_side_effect(selector: str) -> MagicMock:
+            if "internal-track-link" in selector:
+                return mock_title
+            elif "tracklist-row-subtitle" in selector and "album" in selector:
+                return mock_album_links
+            elif "tracklist-row-subtitle" in selector:
+                return mock_artist_links
+            elif "duration" in selector:
+                return mock_duration
+            return MagicMock()
+
+        mock_row.locator = MagicMock(side_effect=row_locator_side_effect)
+
+        mock_rows = MagicMock()
+        mock_rows.count = AsyncMock(return_value=10)  # 10 available
+        mock_rows.nth = MagicMock(return_value=mock_row)
+
+        mock_page.locator = MagicMock(return_value=mock_rows)
+
+        async def run_test() -> list[SearchResult]:
+            with (
+                patch("kutx2spotify.browser.async_playwright") as mock_pw,
+                patch("kutx2spotify.browser.human_delay", new=AsyncMock()),
+            ):
+                mock_pw_instance = MagicMock()
+                mock_pw_instance.start = AsyncMock(return_value=mock_playwright)
+                mock_pw.return_value = mock_pw_instance
+
+                async with SpotifyBrowser() as browser:
+                    results = await browser.search_tracks("query", limit=3)
+                    return results
+
+        results = asyncio.run(run_test())
+        assert len(results) == 3  # Limited to 3
+
+
+class TestSpotifyBrowserAddToPlaylist:
+    """Tests for SpotifyBrowser.add_to_current_playlist method."""
+
+    def test_add_to_playlist_success(
+        self,
+        mock_playwright: MagicMock,
+        mock_browser: MagicMock,
+        mock_context: MagicMock,
+        mock_page: MagicMock,
+    ) -> None:
+        """Test that add_to_current_playlist adds track successfully."""
+        mock_context.new_page.return_value = mock_page
+        mock_browser.new_context.return_value = mock_context
+        mock_playwright.chromium.launch.return_value = mock_browser
+        mock_playwright.stop = AsyncMock()
+
+        # Mock the row locator for right-click
+        mock_row_locator = MagicMock()
+        mock_row_locator.click = AsyncMock()
+
+        # Mock add to playlist button
+        mock_add_btn = MagicMock()
+        mock_add_btn.click = AsyncMock()
+
+        # Mock playlist option
+        mock_playlist_opt = MagicMock()
+        mock_playlist_opt.click = AsyncMock()
+
+        def page_locator_side_effect(selector: str) -> MagicMock:
+            if "add-to-playlist-button" in selector:
+                return mock_add_btn
+            elif "has-text" in selector:
+                return mock_playlist_opt
+            return MagicMock()
+
+        mock_page.locator = MagicMock(side_effect=page_locator_side_effect)
+
+        search_result = SearchResult(
+            title="Test Song",
+            artist="Test Artist",
+            album="Test Album",
+            duration_ms=180000,
+            row_locator=mock_row_locator,
+        )
+
+        async def run_test() -> bool:
+            with (
+                patch("kutx2spotify.browser.async_playwright") as mock_pw,
+                patch("kutx2spotify.browser.human_delay", new=AsyncMock()),
+            ):
+                mock_pw_instance = MagicMock()
+                mock_pw_instance.start = AsyncMock(return_value=mock_playwright)
+                mock_pw.return_value = mock_pw_instance
+
+                async with SpotifyBrowser() as browser:
+                    result = await browser.add_to_current_playlist(
+                        search_result, "My Playlist"
+                    )
+                    return result
+
+        result = asyncio.run(run_test())
+        assert result is True
+        mock_row_locator.click.assert_called_once_with(button="right")
+        mock_add_btn.click.assert_called_once()
+        mock_playlist_opt.click.assert_called_once()
+
+
+class TestSelectionResultDataclass:
+    """Tests for SelectionResult dataclass."""
+
+    def test_selection_result_with_selected(self) -> None:
+        """Test SelectionResult with a selected track."""
+        mock_locator = MagicMock()
+        selected = SearchResult(
+            title="Song",
+            artist="Artist",
+            album="Album",
+            duration_ms=180000,
+            row_locator=mock_locator,
+        )
+        result = SelectionResult(
+            selected=selected,
+            reason="exact_match",
+            alternatives=[],
+        )
+        assert result.selected is not None
+        assert result.reason == "exact_match"
+        assert result.alternatives == []
+
+    def test_selection_result_no_selected(self) -> None:
+        """Test SelectionResult with no selected track."""
+        result = SelectionResult(
+            selected=None,
+            reason="no_results",
+            alternatives=[],
+        )
+        assert result.selected is None
+        assert result.reason == "no_results"
+
+
+class TestDurationToleranceConstant:
+    """Tests for DURATION_TOLERANCE_MS constant."""
+
+    def test_tolerance_is_10_seconds(self) -> None:
+        """Test that duration tolerance is 10 seconds."""
+        assert DURATION_TOLERANCE_MS == 10000

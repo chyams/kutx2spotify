@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -12,7 +14,124 @@ from typing import TYPE_CHECKING, Any
 from playwright.async_api import async_playwright
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, BrowserContext, Page
+    from playwright.async_api import Browser, BrowserContext, Locator, Page
+
+# Duration tolerance in milliseconds (10 seconds)
+DURATION_TOLERANCE_MS = 10_000
+
+
+def albums_match(album1: str, album2: str) -> bool:
+    """Check if albums match (case-insensitive).
+
+    Args:
+        album1: First album name.
+        album2: Second album name.
+
+    Returns:
+        True if albums match.
+    """
+    return album1.lower() == album2.lower()
+
+
+@dataclass
+class SearchResult:
+    """A search result from Spotify web."""
+
+    title: str
+    artist: str
+    album: str
+    duration_ms: int
+    row_locator: Locator
+
+    @property
+    def duration_display(self) -> str:
+        """Format duration as M:SS string."""
+        seconds = self.duration_ms // 1000
+        return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+@dataclass
+class SelectionResult:
+    """Result of selecting a track."""
+
+    selected: SearchResult | None
+    reason: str  # exact_match, album_match, duration_match, first_result, no_results
+    alternatives: list[SearchResult]
+
+
+def parse_duration(duration_str: str) -> int:
+    """Parse duration string (M:SS) to milliseconds.
+
+    Args:
+        duration_str: Duration in M:SS format (e.g., "3:45").
+
+    Returns:
+        Duration in milliseconds.
+    """
+    match = re.match(r"(\d+):(\d{2})", duration_str.strip())
+    if not match:
+        return 0
+    minutes, seconds = int(match.group(1)), int(match.group(2))
+    return (minutes * 60 + seconds) * 1000
+
+
+def select_best_match(
+    results: list[SearchResult],
+    target_album: str,
+    target_duration_ms: int,
+) -> SelectionResult:
+    """Select best matching track from search results.
+
+    Priority:
+    1. Album match + duration match -> exact_match
+    2. Album match only -> album_match
+    3. Duration match only -> duration_match
+    4. First result -> first_result
+    5. No results -> no_results
+
+    Args:
+        results: List of search results.
+        target_album: Album name to match.
+        target_duration_ms: Duration in milliseconds to match.
+
+    Returns:
+        SelectionResult with selected track and reason.
+    """
+    if not results:
+        return SelectionResult(selected=None, reason="no_results", alternatives=[])
+
+    def duration_matches(result: SearchResult) -> bool:
+        return abs(result.duration_ms - target_duration_ms) <= DURATION_TOLERANCE_MS
+
+    # Priority 1: Album match + duration match
+    for result in results:
+        if albums_match(result.album, target_album) and duration_matches(result):
+            alternatives = [r for r in results if r is not result]
+            return SelectionResult(
+                selected=result, reason="exact_match", alternatives=alternatives
+            )
+
+    # Priority 2: Album match only
+    for result in results:
+        if albums_match(result.album, target_album):
+            alternatives = [r for r in results if r is not result]
+            return SelectionResult(
+                selected=result, reason="album_match", alternatives=alternatives
+            )
+
+    # Priority 3: Duration match only
+    for result in results:
+        if duration_matches(result):
+            alternatives = [r for r in results if r is not result]
+            return SelectionResult(
+                selected=result, reason="duration_match", alternatives=alternatives
+            )
+
+    # Priority 4: First result
+    alternatives = results[1:] if len(results) > 1 else []
+    return SelectionResult(
+        selected=results[0], reason="first_result", alternatives=alternatives
+    )
 
 
 def get_cookie_path() -> Path:
@@ -217,3 +336,108 @@ class SpotifyBrowser:
         await human_delay()
 
         return playlist_url
+
+    async def search_tracks(self, query: str, limit: int = 5) -> list[SearchResult]:
+        """Search for tracks on Spotify web.
+
+        Args:
+            query: Search query string (e.g., "artist title").
+            limit: Maximum number of results to return.
+
+        Returns:
+            List of SearchResult objects with parsed track information.
+        """
+        await human_delay()
+        # URL encode the query for search
+        encoded_query = query.replace(" ", "%20")
+        search_url = f"{self.SPOTIFY_URL}/search/{encoded_query}/tracks"
+        await self.page.goto(search_url)
+        await human_delay()
+
+        try:
+            await self.page.wait_for_selector(
+                '[data-testid="tracklist-row"]', timeout=10000
+            )
+        except Exception:
+            # No results found
+            return []
+
+        rows = self.page.locator('[data-testid="tracklist-row"]')
+        count = min(await rows.count(), limit)
+
+        results: list[SearchResult] = []
+        for i in range(count):
+            row = rows.nth(i)
+
+            # Parse title from the track-title link
+            title_elem = row.locator('[data-testid="internal-track-link"]').first
+            title = await title_elem.inner_text()
+
+            # Parse artist(s) - multiple links in the span
+            artist_links = row.locator('span[data-testid="tracklist-row-subtitle"] a')
+            artist_count = await artist_links.count()
+            artists: list[str] = []
+            for j in range(artist_count):
+                artist_text = await artist_links.nth(j).inner_text()
+                # Skip album links (those containing album in href)
+                href = await artist_links.nth(j).get_attribute("href") or ""
+                if "/artist/" in href:
+                    artists.append(artist_text)
+            artist = ", ".join(artists) if artists else ""
+
+            # Parse album - typically the last link in subtitle
+            album_links = row.locator(
+                'span[data-testid="tracklist-row-subtitle"] a[href*="/album/"]'
+            )
+            album = ""
+            if await album_links.count() > 0:
+                album = await album_links.first.inner_text()
+
+            # Parse duration from the duration column
+            duration_elem = row.locator('[data-testid="tracklist-row-duration"]').first
+            duration_text = await duration_elem.inner_text()
+            duration_ms = parse_duration(duration_text)
+
+            results.append(
+                SearchResult(
+                    title=title,
+                    artist=artist,
+                    album=album,
+                    duration_ms=duration_ms,
+                    row_locator=row,
+                )
+            )
+
+        return results
+
+    async def add_to_current_playlist(
+        self, result: SearchResult, playlist_name: str
+    ) -> bool:
+        """Add a track to the current playlist via context menu.
+
+        Args:
+            result: SearchResult containing the row_locator to click.
+            playlist_name: Name of the playlist to add to.
+
+        Returns:
+            True if track was added successfully.
+        """
+        await human_delay()
+
+        # Right-click on the row to open context menu
+        await result.row_locator.click(button="right")
+        await human_delay(500, 1000)
+
+        # Click "Add to playlist" menu item
+        add_to_playlist = self.page.locator(
+            'button[data-testid="add-to-playlist-button"]'
+        )
+        await add_to_playlist.click()
+        await human_delay(500, 1000)
+
+        # Select the target playlist from the submenu
+        playlist_option = self.page.locator(f'button:has-text("{playlist_name}")')
+        await playlist_option.click()
+        await human_delay()
+
+        return True
