@@ -1,15 +1,17 @@
 """Tests for CLI module."""
 
 from datetime import datetime, time
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
 import pytest
 from click.testing import CliRunner
 
+from kutx2spotify.browser import SearchResult
 from kutx2spotify.cli import (
     DATE,
     TIME,
+    _run_browser_workflow,
     main,
     parse_date,
     parse_resolve,
@@ -547,3 +549,260 @@ class TestFetchSongsWithCache:
         assert result.exit_code == 0
         mock_kutx.return_value.fetch_range.assert_called_once()
         mock_cache.return_value.set.assert_called_once()  # Should cache result
+
+
+class TestBrowserModeFlags:
+    """Tests for --browser and --login CLI flags."""
+
+    def test_browser_flag_triggers_browser_workflow(self) -> None:
+        """Test that --browser flag invokes browser workflow."""
+        runner = CliRunner()
+
+        songs = [make_song()]
+
+        with (
+            patch("kutx2spotify.cli.KUTXClient") as mock_kutx,
+            patch("kutx2spotify.cli.SpotifyClient"),
+            patch("kutx2spotify.cli.asyncio.run") as mock_asyncio_run,
+        ):
+            mock_kutx.return_value.fetch_range.return_value = songs
+
+            result = runner.invoke(
+                main,
+                ["--date", "2024-01-15", "--browser"],
+            )
+
+        # Should call asyncio.run with browser workflow
+        assert result.exit_code == 0
+        mock_asyncio_run.assert_called_once()
+
+    def test_browser_flag_with_login(self) -> None:
+        """Test that --login flag is passed to browser workflow."""
+        runner = CliRunner()
+
+        songs = [make_song()]
+
+        with (
+            patch("kutx2spotify.cli.KUTXClient") as mock_kutx,
+            patch("kutx2spotify.cli.SpotifyClient"),
+            patch("kutx2spotify.cli.asyncio.run") as mock_asyncio_run,
+        ):
+            mock_kutx.return_value.fetch_range.return_value = songs
+
+            result = runner.invoke(
+                main,
+                ["--date", "2024-01-15", "--browser", "--login"],
+            )
+
+        assert result.exit_code == 0
+        mock_asyncio_run.assert_called_once()
+        # Verify force_login is True in the call
+        call_args = mock_asyncio_run.call_args
+        assert call_args is not None
+
+    def test_browser_flag_uses_custom_name(self) -> None:
+        """Test that --name is used with browser mode."""
+        runner = CliRunner()
+
+        songs = [make_song()]
+
+        with (
+            patch("kutx2spotify.cli.KUTXClient") as mock_kutx,
+            patch("kutx2spotify.cli.SpotifyClient"),
+            patch("kutx2spotify.cli.asyncio.run") as mock_asyncio_run,
+        ):
+            mock_kutx.return_value.fetch_range.return_value = songs
+
+            result = runner.invoke(
+                main,
+                ["--date", "2024-01-15", "--browser", "--name", "My Playlist"],
+            )
+
+        assert result.exit_code == 0
+        mock_asyncio_run.assert_called_once()
+
+    def test_login_flag_without_browser_still_works(self) -> None:
+        """Test that --login without --browser completes normally (ignored)."""
+        runner = CliRunner()
+
+        songs = [make_song()]
+        match_result = MatchResult()
+        match_result.add(
+            Match(song=songs[0], track=make_track(), status=MatchStatus.EXACT)
+        )
+
+        with (
+            patch("kutx2spotify.cli.KUTXClient") as mock_kutx,
+            patch("kutx2spotify.cli.SpotifyClient") as mock_spotify,
+            patch("kutx2spotify.cli.Matcher") as mock_matcher,
+        ):
+            mock_kutx.return_value.fetch_range.return_value = songs
+            mock_spotify.return_value.is_configured = False
+            mock_matcher.return_value.match_songs.return_value = match_result
+
+            result = runner.invoke(
+                main,
+                ["--date", "2024-01-15", "--login", "--preview"],
+            )
+
+        assert result.exit_code == 0
+        assert "Preview mode" in result.output
+
+
+class TestRunBrowserWorkflow:
+    """Tests for _run_browser_workflow async function."""
+
+    def test_successful_workflow_empty_results(self) -> None:
+        """Test browser workflow with empty search results."""
+        import asyncio
+
+        songs = [make_song()]
+
+        mock_browser = MagicMock()
+        mock_browser.ensure_logged_in = AsyncMock(return_value=True)
+        mock_browser.create_playlist = AsyncMock(
+            return_value="https://open.spotify.com/playlist/abc123"
+        )
+        mock_browser.search_tracks = AsyncMock(return_value=[])
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("kutx2spotify.cli.SpotifyBrowser", return_value=mock_context):
+            # Should complete successfully even with no results found
+            asyncio.run(
+                _run_browser_workflow(songs, "Test Playlist", force_login=False)
+            )
+
+    def test_login_failure(self) -> None:
+        """Test workflow exits on login failure."""
+        import asyncio
+
+        songs = [make_song()]
+
+        mock_browser = MagicMock()
+        mock_browser.ensure_logged_in = AsyncMock(return_value=False)
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("kutx2spotify.cli.SpotifyBrowser", return_value=mock_context):
+            with pytest.raises(SystemExit) as exc_info:
+                asyncio.run(
+                    _run_browser_workflow(songs, "Test Playlist", force_login=False)
+                )
+            assert exc_info.value.code == 1
+
+    def test_playlist_creation_failure(self) -> None:
+        """Test workflow exits on playlist creation failure."""
+        import asyncio
+
+        songs = [make_song()]
+
+        mock_browser = MagicMock()
+        mock_browser.ensure_logged_in = AsyncMock(return_value=True)
+        mock_browser.create_playlist = AsyncMock(return_value=None)
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("kutx2spotify.cli.SpotifyBrowser", return_value=mock_context):
+            with pytest.raises(SystemExit) as exc_info:
+                asyncio.run(
+                    _run_browser_workflow(songs, "Test Playlist", force_login=False)
+                )
+            assert exc_info.value.code == 1
+
+    def test_workflow_with_search_results(self) -> None:
+        """Test workflow processes search results correctly."""
+        import asyncio
+
+        songs = [make_song()]
+
+        mock_locator = MagicMock()
+        mock_search_result = SearchResult(
+            title="Test Song",
+            artist="Test Artist",
+            album="Test Album",
+            duration_ms=180000,
+            row_locator=mock_locator,
+        )
+
+        mock_browser = MagicMock()
+        mock_browser.ensure_logged_in = AsyncMock(return_value=True)
+        mock_browser.create_playlist = AsyncMock(
+            return_value="https://open.spotify.com/playlist/abc123"
+        )
+        mock_browser.search_tracks = AsyncMock(return_value=[mock_search_result])
+        mock_browser.add_to_current_playlist = AsyncMock(return_value=True)
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("kutx2spotify.cli.SpotifyBrowser", return_value=mock_context):
+            asyncio.run(
+                _run_browser_workflow(songs, "Test Playlist", force_login=False)
+            )
+
+        mock_browser.add_to_current_playlist.assert_called_once()
+
+    def test_workflow_handles_add_failure(self) -> None:
+        """Test workflow handles add_to_current_playlist failure gracefully."""
+        import asyncio
+
+        songs = [make_song()]
+
+        mock_locator = MagicMock()
+        mock_search_result = SearchResult(
+            title="Test Song",
+            artist="Test Artist",
+            album="Test Album",
+            duration_ms=180000,
+            row_locator=mock_locator,
+        )
+
+        mock_browser = MagicMock()
+        mock_browser.ensure_logged_in = AsyncMock(return_value=True)
+        mock_browser.create_playlist = AsyncMock(
+            return_value="https://open.spotify.com/playlist/abc123"
+        )
+        mock_browser.search_tracks = AsyncMock(return_value=[mock_search_result])
+        mock_browser.add_to_current_playlist = AsyncMock(
+            side_effect=Exception("Failed to add")
+        )
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("kutx2spotify.cli.SpotifyBrowser", return_value=mock_context):
+            # Should not raise - handles gracefully
+            asyncio.run(
+                _run_browser_workflow(songs, "Test Playlist", force_login=False)
+            )
+
+    def test_force_login_passed_to_browser(self) -> None:
+        """Test force_login parameter is passed to browser."""
+        import asyncio
+
+        songs = [make_song()]
+
+        mock_browser = MagicMock()
+        mock_browser.ensure_logged_in = AsyncMock(return_value=True)
+        mock_browser.create_playlist = AsyncMock(
+            return_value="https://open.spotify.com/playlist/abc123"
+        )
+        mock_browser.search_tracks = AsyncMock(return_value=[])
+
+        mock_context = MagicMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_browser)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("kutx2spotify.cli.SpotifyBrowser", return_value=mock_context):
+            asyncio.run(_run_browser_workflow(songs, "Test Playlist", force_login=True))
+
+        mock_browser.ensure_logged_in.assert_called_once_with(force_login=True)
