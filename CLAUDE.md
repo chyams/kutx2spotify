@@ -30,6 +30,7 @@ src/kutx2spotify/   # Main package
   cache.py          # Caching layer (KUTX playlists, match resolutions)
   spotify.py        # Spotify API client
   matcher.py        # Song matching engine
+  browser.py        # Browser automation utilities (cookies, human delays)
   cli.py            # Click CLI interface
   output.py         # Rich output formatting
 tests/              # Test files
@@ -53,6 +54,7 @@ Response structure (playlists nested in program blocks):
 
 - KUTX playlists: `~/.cache/kutx2spotify/kutx/YYYY-MM-DD.json`
 - Match resolutions: `~/.cache/kutx2spotify/resolutions.json`
+- Browser cookies: `~/.cache/kutx2spotify/spotify_cookies.json`
 
 ## Matching Algorithm
 

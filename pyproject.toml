@@ -9,6 +9,7 @@ dependencies = [
     "spotipy>=2.24.0",
     "click>=8.1.0",
     "rich>=13.0.0",
+    "playwright>=1.40.0",
 ]
 
 [project.scripts]
