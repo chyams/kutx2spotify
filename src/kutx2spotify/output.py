@@ -5,7 +5,8 @@ from urllib.parse import quote_plus
 from rich.console import Console
 from rich.text import Text
 
-from kutx2spotify.models import Match, MatchResult, MatchStatus
+from kutx2spotify.browser import SelectionResult
+from kutx2spotify.models import Match, MatchResult, MatchStatus, Song
 
 console = Console()
 
@@ -253,3 +254,96 @@ def print_info(message: str) -> None:
         message: Info message to print.
     """
     console.print(message, style="dim")
+
+
+def print_browser_header(playlist_name: str) -> None:
+    """Print header for browser mode.
+
+    Args:
+        playlist_name: Name of the playlist being created.
+    """
+    console.print()
+    console.print(f"Creating playlist: {playlist_name} (private)", style="bold")
+    console.print()
+    console.print("Adding songs...")
+
+
+def print_browser_track_added(
+    index: int, song: Song, selection: SelectionResult
+) -> None:
+    """Print track addition result with reason and alternatives.
+
+    Args:
+        index: 1-based index of the track.
+        song: The original song from KUTX.
+        selection: The selection result containing the matched track.
+    """
+    if selection.selected is None:
+        return
+
+    selected = selection.selected
+    reason = selection.reason
+
+    # Format the base info
+    line = Text()
+    line.append(f"  {index:2d}. ")
+    line.append("[green]v[/green] ", style="green")
+    line.append(f"{song.title} - {song.artist}")
+
+    # Add selection reason
+    if reason == "exact_match":
+        line.append(f" [{reason}]", style="dim")
+    elif reason == "album_match":
+        diff_ms = selected.duration_ms - song.duration_ms
+        diff_str = format_duration_diff(diff_ms)
+        line.append(f" [{reason}: {diff_str}]", style="dim")
+    elif reason == "duration_match":
+        line.append(
+            f' [{reason}: "{selected.album}" vs "{song.album}"]', style="yellow"
+        )
+    elif reason == "first_result":
+        line.append(f" [{reason}]", style="yellow")
+
+    console.print(line)
+
+    # Show alternatives for non-exact matches
+    if reason not in ("exact_match",) and selection.alternatives:
+        alts = selection.alternatives[:3]  # Show max 3 alternatives
+        alt_strs = []
+        for alt in alts:
+            diff_ms = alt.duration_ms - song.duration_ms
+            diff_str = format_duration_diff(diff_ms)
+            alt_strs.append(f'"{alt.album}" [{diff_str}]')
+        console.print(f"     Other options: {', '.join(alt_strs)}", style="dim")
+
+
+def print_browser_track_skipped(index: int, song: Song, error: str) -> None:
+    """Print when track addition failed.
+
+    Args:
+        index: 1-based index of the track.
+        song: The song that was skipped.
+        error: The reason for skipping (e.g., "no results").
+    """
+    line = Text()
+    line.append(f"  {index:2d}. ")
+    line.append("[red]x[/red] ", style="red")
+    line.append(f"{song.title} - {song.artist}")
+    line.append(f" [skipped: {error}]", style="red")
+    console.print(line)
+
+
+def print_browser_summary(added: int, skipped: int, playlist_url: str) -> None:
+    """Print browser mode summary.
+
+    Args:
+        added: Number of tracks successfully added.
+        skipped: Number of tracks skipped.
+        playlist_url: URL of the created playlist.
+    """
+    total = added + skipped
+    console.print()
+    console.print("Summary:", style="bold")
+    console.print(f"  Added: {added}/{total}")
+    console.print(f"  Skipped: {skipped}")
+    console.print(f"  Playlist: {playlist_url}")
