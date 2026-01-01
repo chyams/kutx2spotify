@@ -90,6 +90,7 @@ class SpotifyClient:
             artist=artist_name,
             album=track_data.get("album", {}).get("name", ""),
             duration_ms=track_data.get("duration_ms", 0),
+            popularity=track_data.get("popularity", 0),
         )
 
     def search_track(
@@ -149,6 +150,36 @@ class SpotifyClient:
             SpotifyNotConfiguredError: If credentials are not configured.
         """
         return self.search_track(title=title, artist=artist, album=None)
+
+    def search_tracks(
+        self,
+        title: str,
+        artist: str,
+        limit: int = 10,
+    ) -> list[SpotifyTrack]:
+        """Search for tracks without album filter, returning multiple results.
+
+        Used by the matcher to find candidates for duration filtering.
+        Builds query: track:"title" artist:"artist"
+
+        Args:
+            title: Track title.
+            artist: Artist name.
+            limit: Maximum number of results to return.
+
+        Returns:
+            List of SpotifyTrack matches (may be empty).
+
+        Raises:
+            SpotifyNotConfiguredError: If credentials are not configured.
+        """
+        client = self._get_client()
+
+        query = f'track:"{title}" artist:"{artist}"'
+        results = client.search(q=query, type="track", limit=limit)
+        items = results.get("tracks", {}).get("items", [])
+
+        return [self._parse_track(item) for item in items]
 
     def create_playlist(
         self,

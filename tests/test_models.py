@@ -92,6 +92,20 @@ class TestSpotifyTrack:
         assert track.artist == "Herbie Hancock"
         assert track.album == "Head Hunters"
         assert track.duration_ms == 252000
+        assert track.popularity == 0  # Default value
+
+    def test_spotify_track_with_popularity(self) -> None:
+        """Test SpotifyTrack with explicit popularity."""
+        track = SpotifyTrack(
+            id="abc123",
+            uri="spotify:track:abc123",
+            title="Watermelon Man",
+            artist="Herbie Hancock",
+            album="Head Hunters",
+            duration_ms=252000,
+            popularity=85,
+        )
+        assert track.popularity == 85
 
 
 class TestMatchStatus:
