@@ -1,0 +1,35 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install dependencies
+        run: |
+          python -m venv ~/venvs/kutx2spotify
+          ~/venvs/kutx2spotify/bin/pip install -e ".[dev]"
+
+      - name: Lint
+        run: just lint
+
+      - name: Type check
+        run: just typecheck
+
+      - name: Test with coverage
+        run: just coverage
