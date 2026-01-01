@@ -25,8 +25,16 @@ just check-all  # Run all checks
 
 ```
 src/kutx2spotify/   # Main package
+  models.py         # Data models (Song, SpotifyTrack, Match, etc.)
+  kutx.py           # KUTX API client
+  cache.py          # Caching layer (KUTX playlists, match resolutions)
 tests/              # Test files
 ```
+
+## Cache Locations
+
+- KUTX playlists: `~/.cache/kutx2spotify/kutx/YYYY-MM-DD.json`
+- Match resolutions: `~/.cache/kutx2spotify/resolutions.json`
 
 ## Conventions
 
