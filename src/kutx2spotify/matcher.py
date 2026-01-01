@@ -1,6 +1,6 @@
 """Song matching engine for KUTX to Spotify integration."""
 
-from kutx2spotify.cache import Resolution, ResolutionCache
+from kutx2spotify.cache import ResolutionCache
 from kutx2spotify.models import Match, MatchResult, MatchStatus, Song, SpotifyTrack
 from kutx2spotify.spotify import SpotifyClient
 
@@ -197,9 +197,7 @@ class Matcher:
         # Check if album matches (could be exact after all)
         if self._albums_match(song.album, fallback_track.album):
             if within_tolerance:
-                return Match(
-                    song=song, track=fallback_track, status=MatchStatus.EXACT
-                )
+                return Match(song=song, track=fallback_track, status=MatchStatus.EXACT)
             else:
                 return Match(
                     song=song,

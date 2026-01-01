@@ -665,3 +665,163 @@ class TestSpotifyClientParseTrack:
         result = client._parse_track(track_data)
 
         assert result.duration_ms == 0
+
+    def test_parse_track_with_popularity(self) -> None:
+        """Test _parse_track with popularity."""
+        client = SpotifyClient()
+        track_data = {
+            "id": "track-id",
+            "uri": "spotify:track:track-id",
+            "name": "Test Track",
+            "artists": [{"name": "Test Artist"}],
+            "album": {"name": "Test Album"},
+            "duration_ms": 180000,
+            "popularity": 85,
+        }
+
+        result = client._parse_track(track_data)
+
+        assert result.popularity == 85
+
+    def test_parse_track_missing_popularity(self) -> None:
+        """Test _parse_track with missing popularity defaults to 0."""
+        client = SpotifyClient()
+        track_data = {
+            "id": "track-id",
+            "uri": "spotify:track:track-id",
+            "name": "Test Track",
+            "artists": [{"name": "Test Artist"}],
+            "album": {"name": "Test Album"},
+            "duration_ms": 180000,
+        }
+
+        result = client._parse_track(track_data)
+
+        assert result.popularity == 0
+
+
+class TestSpotifyClientSearchTracks:
+    """Tests for search_tracks method."""
+
+    @patch("kutx2spotify.spotify.SpotifyOAuth")
+    @patch("kutx2spotify.spotify.spotipy.Spotify")
+    def test_search_tracks_returns_multiple(
+        self,
+        mock_spotify_class: MagicMock,
+        _mock_oauth: MagicMock,
+    ) -> None:
+        """Test search_tracks returns multiple tracks."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {
+            "tracks": {
+                "items": [
+                    {
+                        "id": "track-1",
+                        "uri": "spotify:track:track-1",
+                        "name": "Watermelon Man",
+                        "artists": [{"name": "Herbie Hancock"}],
+                        "album": {"name": "Head Hunters"},
+                        "duration_ms": 252000,
+                        "popularity": 80,
+                    },
+                    {
+                        "id": "track-2",
+                        "uri": "spotify:track:track-2",
+                        "name": "Watermelon Man",
+                        "artists": [{"name": "Herbie Hancock"}],
+                        "album": {"name": "Live Album"},
+                        "duration_ms": 350000,
+                        "popularity": 60,
+                    },
+                ]
+            }
+        }
+        mock_spotify_class.return_value = mock_client
+
+        env = {
+            "SPOTIPY_CLIENT_ID": "test-id",
+            "SPOTIPY_CLIENT_SECRET": "test-secret",
+            "SPOTIPY_REDIRECT_URI": "http://localhost:8888/callback",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            client = SpotifyClient()
+            results = client.search_tracks(
+                title="Watermelon Man",
+                artist="Herbie Hancock",
+            )
+
+            mock_client.search.assert_called_once_with(
+                q='track:"Watermelon Man" artist:"Herbie Hancock"',
+                type="track",
+                limit=10,
+            )
+
+            assert len(results) == 2
+            assert results[0].id == "track-1"
+            assert results[1].id == "track-2"
+            assert results[0].popularity == 80
+            assert results[1].popularity == 60
+
+    @patch("kutx2spotify.spotify.SpotifyOAuth")
+    @patch("kutx2spotify.spotify.spotipy.Spotify")
+    def test_search_tracks_custom_limit(
+        self,
+        mock_spotify_class: MagicMock,
+        _mock_oauth: MagicMock,
+    ) -> None:
+        """Test search_tracks with custom limit."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {"tracks": {"items": []}}
+        mock_spotify_class.return_value = mock_client
+
+        env = {
+            "SPOTIPY_CLIENT_ID": "test-id",
+            "SPOTIPY_CLIENT_SECRET": "test-secret",
+            "SPOTIPY_REDIRECT_URI": "http://localhost:8888/callback",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            client = SpotifyClient()
+            client.search_tracks(
+                title="Test",
+                artist="Artist",
+                limit=5,
+            )
+
+            mock_client.search.assert_called_once_with(
+                q='track:"Test" artist:"Artist"',
+                type="track",
+                limit=5,
+            )
+
+    @patch("kutx2spotify.spotify.SpotifyOAuth")
+    @patch("kutx2spotify.spotify.spotipy.Spotify")
+    def test_search_tracks_empty_results(
+        self,
+        mock_spotify_class: MagicMock,
+        _mock_oauth: MagicMock,
+    ) -> None:
+        """Test search_tracks returns empty list when no results."""
+        mock_client = MagicMock()
+        mock_client.search.return_value = {"tracks": {"items": []}}
+        mock_spotify_class.return_value = mock_client
+
+        env = {
+            "SPOTIPY_CLIENT_ID": "test-id",
+            "SPOTIPY_CLIENT_SECRET": "test-secret",
+            "SPOTIPY_REDIRECT_URI": "http://localhost:8888/callback",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            client = SpotifyClient()
+            results = client.search_tracks(
+                title="Nonexistent Song",
+                artist="Unknown Artist",
+            )
+
+            assert results == []
+
+    def test_search_tracks_raises_when_not_configured(self) -> None:
+        """Test search_tracks raises SpotifyNotConfiguredError."""
+        with patch.dict(os.environ, {}, clear=True):
+            client = SpotifyClient()
+            with pytest.raises(SpotifyNotConfiguredError):
+                client.search_tracks(title="Test", artist="Test")
