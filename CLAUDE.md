@@ -28,6 +28,8 @@ src/kutx2spotify/   # Main package
   models.py         # Data models (Song, SpotifyTrack, Match, etc.)
   kutx.py           # KUTX API client
   cache.py          # Caching layer (KUTX playlists, match resolutions)
+  spotify.py        # Spotify API client
+  matcher.py        # Song matching engine
 tests/              # Test files
 ```
 
@@ -35,6 +37,14 @@ tests/              # Test files
 
 - KUTX playlists: `~/.cache/kutx2spotify/kutx/YYYY-MM-DD.json`
 - Match resolutions: `~/.cache/kutx2spotify/resolutions.json`
+
+## Matching Algorithm
+
+1. Check resolution cache first (user-stored decisions)
+2. Exact match: search with album, verify album matches
+3. Album fallback: search without album if exact not found
+4. Duration filter: prefer tracks within +/- 10 seconds
+5. Popularity tiebreaker: pick most popular if multiple matches
 
 ## Conventions
 

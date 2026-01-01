@@ -46,6 +46,7 @@ class SpotifyTrack:
     artist: str
     album: str
     duration_ms: int
+    popularity: int = 0
 
 
 @dataclass(frozen=True)
