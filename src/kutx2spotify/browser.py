@@ -308,32 +308,86 @@ class SpotifyBrowser:
             URL of the created playlist, or None if creation failed.
         """
         await human_delay()
-        await self.page.goto(f"{self.SPOTIFY_URL}/collection/playlists")
+        await self.page.goto(f"{self.SPOTIFY_URL}")
         await human_delay()
 
-        create_btn = self.page.locator('[data-testid="create-playlist-button"]')
-        await create_btn.click()
-        await human_delay()
+        # Try multiple approaches to create a playlist
+        # Approach 1: Click the + button in the sidebar (Your Library section)
+        try:
+            # Look for the "Create playlist or folder" button in sidebar
+            create_btn = self.page.locator(
+                'button[aria-label="Create playlist or folder"]'
+            ).first
+            await create_btn.click(timeout=5000)
+            await human_delay()
 
-        await self.page.wait_for_url("**/playlist/**")
+            # Click "Create a new playlist" in the menu
+            new_playlist_option = self.page.locator(
+                'button:has-text("Create a new playlist")'
+            ).first
+            await new_playlist_option.click(timeout=5000)
+            await human_delay()
+        except Exception:
+            # Approach 2: Try right-clicking in library area
+            try:
+                library_section = self.page.locator(
+                    '[data-testid="rootlist-item"]'
+                ).first
+                await library_section.click(button="right", timeout=5000)
+                await human_delay()
+
+                create_option = self.page.locator(
+                    'button:has-text("Create playlist")'
+                ).first
+                await create_option.click(timeout=5000)
+                await human_delay()
+            except Exception:
+                # Approach 3: Navigate directly and try old selector
+                await self.page.goto(f"{self.SPOTIFY_URL}/collection/playlists")
+                await human_delay()
+
+                create_btn = self.page.locator('[data-testid="create-playlist-button"]')
+                await create_btn.click(timeout=10000)
+                await human_delay()
+
+        # Wait for playlist page to load
+        try:
+            await self.page.wait_for_url("**/playlist/**", timeout=10000)
+        except Exception:
+            return None
+
         playlist_url: str = self.page.url
 
-        # Rename playlist
-        title_element = self.page.locator('[data-testid="playlist-name"]').first
-        await title_element.click()
-        await human_delay()
+        # Rename playlist - try clicking on the editable title
+        try:
+            # Try clicking the playlist title/header area
+            title_element = self.page.locator(
+                '[data-testid="entityTitle"] h1, '
+                '[data-testid="playlist-name"], '
+                'h1[data-encore-id="text"]'
+            ).first
+            await title_element.click(timeout=5000)
+            await human_delay()
 
-        name_input = self.page.locator(
-            'input[data-testid="playlist-edit-details-name-input"]'
-        )
-        await name_input.fill(name)
-        await human_delay()
+            # Find and fill the name input
+            name_input = self.page.locator(
+                'input[data-testid="playlist-edit-details-name-input"], '
+                'input[placeholder*="playlist"], '
+                'input[type="text"]'
+            ).first
+            await name_input.fill(name, timeout=5000)
+            await human_delay()
 
-        save_btn = self.page.locator(
-            'button[data-testid="playlist-edit-details-save-button"]'
-        )
-        await save_btn.click()
-        await human_delay()
+            # Save changes
+            save_btn = self.page.locator(
+                'button[data-testid="playlist-edit-details-save-button"], '
+                'button:has-text("Save")'
+            ).first
+            await save_btn.click(timeout=5000)
+            await human_delay()
+        except Exception:
+            # If renaming fails, playlist is still created with default name
+            pass
 
         return playlist_url
 
