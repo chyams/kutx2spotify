@@ -9,27 +9,35 @@ import pytest
 from kutx2spotify.kutx import KUTXClient
 
 SAMPLE_KUTX_RESPONSE = {
-    "playlist": [
+    "onToday": [
         {
-            "_start_time": "01-01-2026 14:30:00",
-            "trackName": "Watermelon Man",
-            "artistName": "Herbie Hancock",
-            "collectionName": "Head Hunters",
-            "_duration": 252000,
+            "playlist": [
+                {
+                    "_start_time": "01-01-2026 14:30:00",
+                    "trackName": "Watermelon Man",
+                    "artistName": "Herbie Hancock",
+                    "collectionName": "Head Hunters",
+                    "_duration": 252000,
+                },
+                {
+                    "_start_time": "01-01-2026 14:35:00",
+                    "trackName": "Chameleon",
+                    "artistName": "Herbie Hancock",
+                    "collectionName": "Head Hunters",
+                    "_duration": 900000,
+                },
+            ]
         },
         {
-            "_start_time": "01-01-2026 14:35:00",
-            "trackName": "Chameleon",
-            "artistName": "Herbie Hancock",
-            "collectionName": "Head Hunters",
-            "_duration": 900000,
-        },
-        {
-            "_start_time": "01-01-2026 16:00:00",
-            "trackName": "So What",
-            "artistName": "Miles Davis",
-            "collectionName": "Kind of Blue",
-            "_duration": 545000,
+            "playlist": [
+                {
+                    "_start_time": "01-01-2026 16:00:00",
+                    "trackName": "So What",
+                    "artistName": "Miles Davis",
+                    "collectionName": "Kind of Blue",
+                    "_duration": 545000,
+                },
+            ]
         },
     ]
 }
@@ -189,7 +197,7 @@ class TestKUTXClientFetchDay:
     def test_fetch_day_empty_playlist(self, mock_client_class: Mock) -> None:
         """Test fetching day with empty playlist."""
         mock_response = Mock()
-        mock_response.json.return_value = {"playlist": []}
+        mock_response.json.return_value = {"onToday": [{"playlist": []}]}
         mock_response.raise_for_status = Mock()
 
         mock_client_instance = Mock()
@@ -204,8 +212,8 @@ class TestKUTXClientFetchDay:
         assert len(songs) == 0
 
     @patch("kutx2spotify.kutx.httpx.Client")
-    def test_fetch_day_missing_playlist_key(self, mock_client_class: Mock) -> None:
-        """Test fetching day with missing playlist key."""
+    def test_fetch_day_missing_ontoday_key(self, mock_client_class: Mock) -> None:
+        """Test fetching day with missing onToday key."""
         mock_response = Mock()
         mock_response.json.return_value = {}
         mock_response.raise_for_status = Mock()
@@ -225,21 +233,25 @@ class TestKUTXClientFetchDay:
     def test_fetch_day_filters_invalid_songs(self, mock_client_class: Mock) -> None:
         """Test fetching day filters out invalid songs."""
         response_with_invalid = {
-            "playlist": [
+            "onToday": [
                 {
-                    "_start_time": "01-01-2026 14:30:00",
-                    "trackName": "Valid Song",
-                    "artistName": "Artist",
-                    "collectionName": "Album",
-                    "_duration": 180000,
-                },
-                {
-                    # Missing trackName
-                    "_start_time": "01-01-2026 14:35:00",
-                    "artistName": "Artist",
-                    "collectionName": "Album",
-                    "_duration": 180000,
-                },
+                    "playlist": [
+                        {
+                            "_start_time": "01-01-2026 14:30:00",
+                            "trackName": "Valid Song",
+                            "artistName": "Artist",
+                            "collectionName": "Album",
+                            "_duration": 180000,
+                        },
+                        {
+                            # Missing trackName
+                            "_start_time": "01-01-2026 14:35:00",
+                            "artistName": "Artist",
+                            "collectionName": "Album",
+                            "_duration": 180000,
+                        },
+                    ]
+                }
             ]
         }
 
@@ -282,7 +294,7 @@ class TestKUTXClientFetchDay:
     def test_fetch_day_passes_correct_params(self, mock_client_class: Mock) -> None:
         """Test fetch_day passes correct params to API."""
         mock_response = Mock()
-        mock_response.json.return_value = {"playlist": []}
+        mock_response.json.return_value = {"onToday": []}
         mock_response.raise_for_status = Mock()
 
         mock_client_instance = Mock()

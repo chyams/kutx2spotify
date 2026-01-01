@@ -30,7 +30,23 @@ src/kutx2spotify/   # Main package
   cache.py          # Caching layer (KUTX playlists, match resolutions)
   spotify.py        # Spotify API client
   matcher.py        # Song matching engine
+  cli.py            # Click CLI interface
+  output.py         # Rich output formatting
 tests/              # Test files
+```
+
+## KUTX API
+
+NPR Composer API: `https://api.composer.nprstations.org/v1/widget/50ef24ebe1c8a1369593d032/day`
+
+Response structure (playlists nested in program blocks):
+```json
+{
+  "onToday": [
+    { "playlist": [ { "trackName": "...", "artistName": "...", ... } ] },
+    { "playlist": [ ... ] }
+  ]
+}
 ```
 
 ## Cache Locations

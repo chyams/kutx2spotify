@@ -78,13 +78,17 @@ class KUTXClient:
             response.raise_for_status()
             data = response.json()
 
-        playlist = data.get("playlist", [])
+        # API returns playlists nested inside onToday array
+        # Each element in onToday is a program block with its own playlist
+        on_today = data.get("onToday", [])
         songs: list[Song] = []
 
-        for track_data in playlist:
-            song = self._parse_song(track_data)
-            if song is not None:
-                songs.append(song)
+        for program_block in on_today:
+            playlist = program_block.get("playlist", [])
+            for track_data in playlist:
+                song = self._parse_song(track_data)
+                if song is not None:
+                    songs.append(song)
 
         return songs
 
